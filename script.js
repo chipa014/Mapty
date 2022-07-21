@@ -3,6 +3,7 @@
 // prettier-ignore
 const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
+const logo = document.querySelector('.logo');
 const form = document.querySelector('.form--add');
 const containerWorkouts = document.querySelector('.workouts');
 const inputType = document.querySelector('.form__input--type');
@@ -13,11 +14,16 @@ const inputElevation = document.querySelector('.form__input--elevation');
 const sortInput = document.querySelector('.workouts__sort--input');
 const btnDeleteAll = document.querySelector('.workouts__btn--delete-all');
 
+const style = window.getComputedStyle(document.querySelector(':root'));
+const colorBrand1 = style.getPropertyValue('--color-brand--1');
+const colorBrand2 = style.getPropertyValue('--color-brand--2');
+const colorDark1 = style.getPropertyValue('--color-dark--1');
+
 class Workout {
   constructor(distance, duration, coords, date = new Date(), id) {
     this.distance = distance; //in km
     this.duration = duration; //in min
-    this.coords = coords;
+    this.coords = coords; //An array of coordinates representing the path
     this.date = date;
     if (id) this.id = id;
     else this.id = (Date.now() + '').slice(-10);
@@ -33,6 +39,7 @@ class Running extends Workout {
   }
 
   calcPace() {
+    //in min/k,
     this.pace = +(this.duration / this.distance).toFixed(3);
   }
 }
@@ -55,6 +62,8 @@ class App {
   #map;
   #mapEvent;
   #workouts = [];
+  #currentPolyline;
+  #displayPolyline;
   constructor() {
     this.#getPosition();
     form.addEventListener('submit', this.#newWorkout.bind(this));
@@ -65,6 +74,7 @@ class App {
     );
     sortInput.addEventListener('change', this.#sortAndDisplayList.bind(this));
     btnDeleteAll.addEventListener('click', this.#reset.bind(this));
+    logo.addEventListener('click', this.#zoomOut.bind(this));
     this.#loadLocalStorage();
   }
 
@@ -90,19 +100,36 @@ class App {
       attribution:
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(this.#map);
-    this.#map.on('click', this.#showForm.bind(this));
-
+    this.#currentPolyline = L.polyline([], {
+      color: colorDark1,
+      weight: 6,
+    }).addTo(this.#map);
+    this.#displayPolyline = L.polyline([], {
+      color: colorBrand2,
+      weight: 6,
+    }).addTo(this.#map);
+    this.#map.on('click', this.#pathPoint.bind(this));
     this.#workouts.forEach(workout => {
       this.#addMarker(workout);
     });
     this.#sortAndDisplayList();
   }
 
+  //Happens when the map is clicked
+  #pathPoint(mapE) {
+    this.#displayPolyline.setLatLngs([]);
+    this.#mapEvent = mapE;
+    if (this.#currentPolyline.isEmpty()) this.#showForm();
+    const { lat, lng } = this.#mapEvent.latlng;
+    this.#currentPolyline.addLatLng([lat, lng]);
+  }
+
+  //Marker is added to the start of the path
   #addMarker(workout) {
     const message = `${
       workout.type === 'running' ? '🏃‍♀️ Running' : '🚴 Cycling'
     } on ${months[workout.date.getMonth()]} ${workout.date.getDate()}`;
-    L.marker(workout.coords)
+    L.marker(workout.coords[0])
       .addTo(this.#map)
       .bindPopup(
         L.popup({
@@ -113,10 +140,39 @@ class App {
           className: `${
             workout.type === 'running' ? 'running' : 'cycling'
           }-popup`,
-        })
+        }),
+        { autoPan: false }
       )
       .setPopupContent(message)
       .openPopup();
+  }
+
+  //You can click the logo to see every workout on the map simultaneously.
+  //A separate button would make more sense, couldn't fit it in without completely overhauling
+  //the initial design provided in the exercise
+  #zoomOut() {
+    if (this.#workouts.length == 0) return;
+    if (this.#workouts.length == 1) {
+      this.map.setView(this.#workouts[0], 13);
+      return;
+    }
+    const bounds = L.latLngBounds(this.#workouts.map(wo => wo.coords)).pad(0.1);
+    this.#map.fitBounds(bounds);
+  }
+
+  #resetCurrentPolyline() {
+    this.#currentPolyline.setLatLngs([]);
+  }
+
+  #shiftMapToMarker(workout) {
+    this.#displayPolyline
+      .setStyle({
+        color: workout.type === 'running' ? colorBrand2 : colorBrand1,
+      })
+      .setLatLngs(workout.coords);
+    if (this.#workouts.length == 0) return;
+    const bounds = L.latLngBounds(workout.coords).pad(0.1);
+    this.#map.fitBounds(bounds);
   }
 
   //Adding Form
@@ -132,29 +188,57 @@ class App {
       .classList.toggle('form__row--hidden');
   }
 
-  #showForm(mapE) {
+  #showForm() {
+    const openForm = document.querySelector('.form--edit');
+    if (openForm && !this.#closeEditForm(openForm)) {
+      // alert('Submit your previous form first');
+      return;
+    }
     if (document.querySelector('.form--edit')) {
       alert('Submit your previous form first');
       return;
     }
-    this.#mapEvent = mapE;
+    // this.#mapEvent = mapE;
     form.classList.remove('hidden');
     inputDistance.focus();
   }
 
-  #hideForm() {
-    form.style.display = 'none';
+  #hideForm(smooth) {
+    if (!smooth) {
+      form.style.display = 'none';
+      setTimeout(function () {
+        form.style.display = 'grid';
+      }, 500);
+    }
     form.classList.add('hidden');
     inputDistance.value =
       inputDuration.value =
       inputCadence.value =
       inputElevation.value =
         '';
-    setTimeout(function () {
-      form.style.display = 'grid';
-    }, 500);
+    form
+      .querySelectorAll('.form__input')
+      .forEach(el => el.classList.remove('wrong--input'));
   }
 
+  //Form submission
+  //This is an event for the adding form
+  #newWorkout(e) {
+    e.preventDefault();
+    //Get data from form
+    const workoutParams = {
+      type: inputType.value,
+      distance: +inputDistance.value,
+      duration: +inputDuration.value,
+      cadence: +inputCadence.value,
+      //Usual Number conversion transforms '' into 0 instead of undefined
+      elevation:
+        inputElevation.value === '' ? undefined : +inputElevation.value,
+    };
+    this.#addWorkout(workoutParams, true);
+  }
+
+  //Form submission
   #checkWorkoutData(workoutData) {
     const { type, distance, duration, cadence, elevation } = workoutData;
     const currentForm = document.querySelector('.form:not(.hidden)');
@@ -198,27 +282,16 @@ class App {
     return true;
   }
 
-  #newWorkout(e) {
-    e.preventDefault();
-    //Get data from form
-    const { lat, lng } = this.#mapEvent.latlng;
-    const workoutParams = {
-      type: inputType.value,
-      distance: +inputDistance.value,
-      duration: +inputDuration.value,
-      cadence: +inputCadence.value,
-      //Usual Number conversion transforms '' into 0 instead of undefined
-      elevation:
-        inputElevation.value === '' ? undefined : +inputElevation.value,
-      lat: lat,
-      lng: lng,
-    };
-    this.#addWorkout(workoutParams, true);
-  }
-
+  //Check the necessary and add the workout to all places needed
+  //The main method of adding workouts
   #addWorkout(workoutParams, isNew) {
-    const { type, distance, duration, cadence, elevation, lat, lng, date, id } =
+    const { type, distance, duration, cadence, elevation, date, id } =
       workoutParams;
+    const coords =
+      workoutParams.coords ??
+      this.#currentPolyline
+        .getLatLngs()
+        .map(latlng => [latlng.lat, latlng.lng]);
     //Check if data is valid
     if (
       !this.#checkWorkoutData({ type, distance, duration, cadence, elevation })
@@ -229,24 +302,10 @@ class App {
     let workout;
     switch (type) {
       case 'running':
-        workout = new Running(
-          distance,
-          duration,
-          [lat, lng],
-          cadence,
-          date,
-          id
-        );
+        workout = new Running(distance, duration, coords, cadence, date, id);
         break;
       case 'cycling':
-        workout = new Cycling(
-          distance,
-          duration,
-          [lat, lng],
-          elevation,
-          date,
-          id
-        );
+        workout = new Cycling(distance, duration, coords, elevation, date, id);
         break;
     }
     //Add new object to workouts array
@@ -254,14 +313,14 @@ class App {
     //Save data to the local storage
     this.#setLocalStorage();
     //Render the workout to the list
-    //If the added element is edited and now new then this.#sortAndDisplayList will take care of adding it to list
     this.#sortAndDisplayList();
     if (isNew) {
       //Render the workout to the map as a marker
       this.#addMarker(workout);
       //Hide form and clear input fields
-      this.#hideForm();
+      this.#hideForm(false);
     }
+    this.#resetCurrentPolyline();
   }
 
   //Editing Form
@@ -269,9 +328,11 @@ class App {
     // const openForm = document.querySelector('.form:not(.hidden)');
     // const prevFormClosed = openForm ? this.#closeEditForm(openForm) : true;
     // if (!prevFormClosed) return;
-    form.classList.add('hidden');
-    if (document.querySelector('.form--edit')) {
-      alert('Submit your previous form first');
+    this.#hideForm(true);
+    document.querySelector('.wrong--input--message')?.remove();
+    const openForm = document.querySelector('.form--edit');
+    if (openForm && !this.#closeEditForm(openForm)) {
+      // alert('Submit your previous form first');
       return;
     }
     const workout = this.#workouts.find(wo => wo.id === workoutID);
@@ -335,10 +396,7 @@ class App {
       .addEventListener('change', this.#toggleElevationField);
     currentForm.addEventListener('submit', this.#submitEditForm.bind(this));
     currentForm.querySelector('.form__input--distance').focus();
-    // this.#workouts.splice(
-    //   this.#workouts.findIndex(wo => wo === workout),
-    //   1
-    // );
+    this.#currentPolyline.setLatLngs([]);
   }
 
   #closeEditForm(currentForm) {
@@ -364,7 +422,8 @@ class App {
     const id = currentForm.dataset.id;
     const editedWOIndex = this.#workouts.findIndex(wo => wo.id === id);
     const editedWO = this.#workouts[editedWOIndex];
-    [workoutData.lat, workoutData.lng] = editedWO.coords;
+    //Deep copying two-level deep array
+    workoutData.coords = editedWO.coords.map(latlng => latlng.slice());
     workoutData.date = editedWO.date;
     workoutData.id = editedWO.id;
     this.#workouts.splice(editedWOIndex, 1);
@@ -383,11 +442,12 @@ class App {
   //Deleting Workouts
   #deleteWorkout(workout) {
     const i = this.#workouts.findIndex(wo => wo === workout);
-    console.log(i);
+
     this.#workouts.splice(i, 1);
-    console.log(this.#workouts);
+
     this.#setLocalStorage();
     location.reload();
+    this.#currentPolyline.setLatLngs([]);
   }
 
   //Workouts Menu
@@ -404,10 +464,7 @@ class App {
       return;
     }
     this.#shiftMapToMarker(workout);
-  }
-
-  #shiftMapToMarker(workout) {
-    this.#map.setView(workout.coords);
+    this.#currentPolyline.setLatLngs([]);
   }
 
   //Displaying the workouts list
@@ -478,14 +535,12 @@ class App {
 
   //Local Storage
   #setLocalStorage() {
-    console.log(this.#workouts);
     localStorage.setItem('workouts', JSON.stringify(this.#workouts));
   }
 
   #loadLocalStorage() {
     const loadedWorkouts = JSON.parse(localStorage.getItem('workouts')) || [];
     loadedWorkouts.forEach(lWorkout => {
-      // console.log(typeof workout.date);
       const date = new Date(lWorkout.date);
       let workout;
       switch (lWorkout.type) {
@@ -512,7 +567,6 @@ class App {
       if (!workout) return;
       this.#workouts.push(workout);
     });
-    console.log(this.#workouts);
   }
 
   #reset() {
@@ -522,7 +576,3 @@ class App {
 }
 
 const app = new App();
-
-//FIXED:
-//Several entries loaded from local storage point to one marker
-//Fields showing undefined after being loaded from local storage
