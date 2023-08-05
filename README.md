@@ -1,10 +1,7 @@
 # Mapty
 A website for keeping records of your workouts on a map. This project was developed as an exercise in Jonas Schmedtmann's JavaScript course. 
 
-Instruction:
-
-1. Download the files in the repository and put them in the same folder.
-2. Open index.html in your preferred browser.
+See the final result: https://chipa014-mapty.netlify.app/
 
 Functionality:
 
